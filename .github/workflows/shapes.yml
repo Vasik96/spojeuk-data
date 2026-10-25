@@ -1,0 +1,69 @@
+name: Build shapes
+
+on:
+  schedule:
+    - cron: "30 6 * * 1"        # každé pondělí 06:30 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Postavit i když se upstream nezměnil"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                # vytvoření/aktualizace release "shapes"
+
+concurrency: shapes
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: Sap1k/obehy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Zjistit, jestli je co stavět
+        id: need
+        run: |
+          mkdir -p work
+          UP_TAG=$(gh release view -R "$UPSTREAM" --json tagName -q .tagName)
+          PREV_TAG=""
+          if gh release download shapes -p shapes.json -D work --clobber 2>/dev/null; then
+            PREV_TAG=$(jq -r '.upstream // ""' work/shapes.json)
+            mv work/shapes.json work/prev.json
+          fi
+          echo "tag=$UP_TAG" >> "$GITHUB_OUTPUT"
+          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream $UP_TAG už zpracován, nic se nedělá."
+          fi
+
+      - name: Stáhnout data obehy
+        if: steps.need.outputs.build == 'true'
+        run: gh release download "${{ steps.need.outputs.tag }}" -R "$UPSTREAM" -p jdf.tar -p jdf-filtered.tar -D work
+
+      - name: Postavit shapes.sqlite
+        if: steps.need.outputs.build == 'true'
+        run: |
+          python tools/build_shapes.py \
+            --full work/jdf.tar --filtered work/jdf-filtered.tar \
+            --out work/shapes.sqlite --meta work/shapes.json \
+            --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json
+
+      - name: Publikovat
+        if: steps.need.outputs.build == 'true'
+        run: |
+          gh release view shapes >/dev/null 2>&1 || \
+            gh release create shapes --title "Shapes (automaticky)" \
+              --notes "Trasy spojů generované workflow Build shapes. Needitovat ručně." --latest=false
+          gh release upload shapes work/shapes.sqlite --clobber
+          gh release upload shapes work/shapes.json --clobber
