@@ -120,6 +120,105 @@ def decode(blob):
         out.append((la / 1e6, lo / 1e6))
     return out
 
+def parse_pt(p):
+    if isinstance(p, str):
+        la, lo = (float(x) for x in p.replace(";", ",").split(","))
+    else:
+        la, lo = float(p[0]), float(p[1])
+    return la, lo
+
+
+def dist_m(a, b):
+    kx = 111320.0 * math.cos(math.radians(a[0]))
+    return math.hypot((a[1] - b[1]) * kx, (a[0] - b[0]) * 110540.0)
+
+
+def load_overrides(path):
+    """Vrací (seznam aktivních overrides, sha256 souboru)."""
+    if not path or not os.path.exists(path):
+        return [], ""
+    raw = open(path, "rb").read()
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+        ovs = [o for o in data.get("overrides", []) if o.get("enabled", True)]
+        for o in ovs:
+            if not o.get("match"):
+                raise ValueError(f"override bez 'match': {o.get('comment', o)}")
+            if ("splice" in o) == ("replace" in o):
+                raise ValueError(f"override musí mít právě jedno z 'splice'/'replace': {o.get('comment', o)}")
+            if "splice" in o:
+                s = o["splice"]
+                parse_pt(s["from"]); parse_pt(s["to"])
+                [parse_pt(p) for p in s.get("via", [])]
+            else:
+                if len(o["replace"]) < 2:
+                    raise ValueError("replace potřebuje aspoň 2 body")
+                [parse_pt(p) for p in o["replace"]]
+    except (ValueError, KeyError, TypeError) as e:
+        raise SystemExit(f"{path}: neplatný overrides soubor: {e}")
+    return ovs, hashlib.sha256(raw).hexdigest()
+
+
+def _matches(o, tid, sid, line):
+    m = o["match"]
+    conds = []
+    if "lines" in m:
+        conds.append(line in {str(x) for x in m["lines"]})
+    if "trip_ids" in m:
+        conds.append(tid in set(m["trip_ids"]))
+    if "shape_ids" in m:
+        conds.append(sid in {str(x) for x in m["shape_ids"]})
+    return bool(conds) and all(conds)
+
+
+def _apply_one(o, pts):
+    if "replace" in o:
+        return [parse_pt(p) for p in o["replace"]]
+    s = o["splice"]
+    tol = float(o.get("tolerance_m", 80))
+    frm, to = parse_pt(s["from"]), parse_pt(s["to"])
+    via = [parse_pt(p) for p in s.get("via", [])]
+    i = min(range(len(pts)), key=lambda k: dist_m(pts[k], frm))
+    if dist_m(pts[i], frm) > tol or i + 1 >= len(pts):
+        return None
+    j = min(range(i + 1, len(pts)), key=lambda k: dist_m(pts[k], to))
+    if dist_m(pts[j], to) > tol:
+        return None
+    return pts[:i + 1] + via + pts[j:]
+
+
+def apply_overrides(ovs, kept, trip_shape, trip_line):
+    groups = {}
+    for tid, sid in trip_shape.items():
+        if sid not in kept:
+            continue
+        idxs = tuple(n for n, o in enumerate(ovs) if _matches(o, tid, sid, trip_line.get(tid, "")))
+        if idxs:
+            groups.setdefault((sid, idxs), []).append(tid)
+    hit = [0] * len(ovs)
+    kept, trip_shape = dict(kept), dict(trip_shape)
+    orig = dict(kept)
+    for (sid, idxs), tids in groups.items():
+        pts = orig[sid]
+        for n in idxs:
+            res = _apply_one(ovs[n], pts)
+            if res is not None:
+                pts = res
+                hit[n] += len(tids)
+        if pts is orig[sid]:
+            continue
+        key = f"{sid}#ovr{'-'.join(map(str, idxs))}"   # fork, ať se nezmění ostatní spoje se stejným tvarem
+        kept[key] = pts
+        for t in tids:
+            trip_shape[t] = key
+    for n, o in enumerate(ovs):
+        name = o.get("comment", f"#{n}")
+        if hit[n]:
+            log(f"Override '{name}': použit na {hit[n]} spojů")
+        else:
+            log(f"VAROVÁNÍ: override '{name}' se nepoužil (nic nesedí, změnilo se číslování nebo jsou body mimo tvar?)")
+    return kept, trip_shape
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -131,6 +230,7 @@ def main():
     ap.add_argument("--prev", help="shapes.json předchozí verze (kontrola, že nový build není podezřele malý)")
     ap.add_argument("--min-ratio", type=float, default=0.9)
     ap.add_argument("--min-trips", type=int, default=1000)
+    ap.add_argument("--overrides", default="", help="JSON s ručními úpravami tras")
     a = ap.parse_args()
     t0 = time.time()
     work = os.path.dirname(os.path.abspath(a.out))
@@ -143,7 +243,11 @@ def main():
 
     # 1) spoje, které appka zná (filtrovaný feed)
     ix, r = rows(zl, "trips.txt")
-    wanted = {row[ix["trip_id"]] for row in r}
+    trip_route = {row[ix["trip_id"]]: row[ix["route_id"]] for row in r}
+    wanted = set(trip_route)
+    ix, r = rows(zl, "routes.txt")
+    short = {row[ix["route_id"]]: row[ix["route_short_name"]] for row in r}
+    trip_line = {t: short.get(rid, "") for t, rid in trip_route.items()}
     log(f"Spojů ve filtrovaném feedu: {len(wanted)}")
 
     # 2) jejich shape_id z plného feedu
@@ -189,6 +293,9 @@ def main():
             hit = True
     flush()
     log(f"Tvarů v oblasti: {len(kept)}")
+    ovs, ov_sha = load_overrides(a.overrides)
+    if ovs:
+        kept, trip_shape = apply_overrides(ovs, kept, trip_shape, trip_line)
 
     # 4) zjednodušit, zakódovat, uložit
     if os.path.exists(a.out):
@@ -200,7 +307,8 @@ def main():
         CREATE TABLE trip_shape(gid TEXT PRIMARY KEY, shape INTEGER NOT NULL) WITHOUT ROWID;
     """)
     sid_of, pts_in, pts_out = {}, 0, 0
-    for n, (g, pts) in enumerate(kept.items(), 1):
+    used = set(trip_shape.values())
+    for n, (g, pts) in enumerate(((g, p) for g, p in kept.items() if g in used), 1):
         simple = simplify(pts, EPS_M)
         pts_in += len(pts); pts_out += len(simple)
         db.execute("INSERT INTO shape VALUES(?,?)", (n, encode(simple)))
@@ -228,7 +336,8 @@ def main():
 
     sha = hashlib.sha256(open(a.out, "rb").read()).hexdigest()
     json.dump({"schema": 1, "built": built, "upstream": a.upstream, "trips": len(pairs),
-               "shapes": len(sid_of), "size": os.path.getsize(a.out), "sha256": sha}, open(a.meta, "w"))
+            "shapes": len(sid_of), "size": os.path.getsize(a.out), "sha256": sha,
+            "overrides": ov_sha}, open(a.meta, "w"))
     os.remove(os.path.join(work, "full-gtfs.zip"))
     os.remove(os.path.join(work, "filtered-gtfs.zip"))
     log(f"Hotovo za {time.time() - t0:.0f} s")

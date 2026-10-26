@@ -2,7 +2,12 @@ name: Build shapes
 
 on:
   schedule:
-    - cron: "30 6 * * 1"        # každé pondělí 06:30 UTC
+    - cron: "30 6 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "tools/shape_overrides.json"
+      - "tools/build_shapes.py"
   workflow_dispatch:
     inputs:
       force:
@@ -34,17 +39,19 @@ jobs:
         run: |
           mkdir -p work
           UP_TAG=$(gh release view -R "$UPSTREAM" --json tagName -q .tagName)
-          PREV_TAG=""
+          OV_SHA=$(sha256sum tools/shape_overrides.json 2>/dev/null | cut -d' ' -f1 || true)
+          PREV_TAG=""; PREV_OV=""
           if gh release download shapes -p shapes.json -D work --clobber 2>/dev/null; then
             PREV_TAG=$(jq -r '.upstream // ""' work/shapes.json)
+            PREV_OV=$(jq -r '.overrides // ""' work/shapes.json)
             mv work/shapes.json work/prev.json
           fi
           echo "tag=$UP_TAG" >> "$GITHUB_OUTPUT"
-          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
+          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "$OV_SHA" != "$PREV_OV" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Upstream $UP_TAG už zpracován, nic se nedělá."
+            echo "Nic se nezměnilo, nic se nedělá."
           fi
 
       - name: Stáhnout data obehy
@@ -57,7 +64,8 @@ jobs:
           python tools/build_shapes.py \
             --full work/jdf.tar --filtered work/jdf-filtered.tar \
             --out work/shapes.sqlite --meta work/shapes.json \
-            --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json
+            --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json \
+            --overrides tools/shape_overrides.json
 
       - name: Publikovat
         if: steps.need.outputs.build == 'true'
