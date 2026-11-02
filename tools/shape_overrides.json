@@ -3,7 +3,7 @@
     {
       "comment": "Linka 81 u hl. nádraží divně, správně je zabočení doleva nahoru a pak doprava a pak rovně",
       "enabled": true,
-      "match": { "lines": ["81", "83", "85", "89"] },
+      "match": { "lines": ["81", "83", "85", "89", "79"] },
       "splice": {
         "from": "50.660212, 14.0450955",
         "to":   "50.660701, 14.048446",
