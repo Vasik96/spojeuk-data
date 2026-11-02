@@ -3,7 +3,7 @@
     {
       "comment": "Linka 81 u hl. nádraží divně, správně je zabočení doleva nahoru a pak doprava a pak rovně",
       "enabled": true,
-      "match": { "lines": ["81", "83", "85"] },
+      "match": { "lines": ["81", "83", "85", "89"] },
       "splice": {
         "from": "50.660212, 14.0450955",
         "to":   "50.660701, 14.048446",
@@ -16,6 +16,15 @@
           "50.66092, 14.047866",
           "50.660656, 14.048246"
         ]
+      }
+    },
+    {
+      "comment": "85 směrem Z VAŇOVA fix",
+      "enabled": true,
+      "match": { "lines": ["85"] },
+      "splice": {
+        "from": "50.65769, 14.0406",
+        "to":   "50.65794, 14.040354"
       }
     }
   ]
