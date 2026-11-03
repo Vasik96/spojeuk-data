@@ -305,65 +305,150 @@ def matches_override(rule, trip_id, line, shape_id):
     return True
 
 
+
+def parse_coord(value):
+    """Parse 'latitude, longitude'."""
+    lat, lon = value.split(",", 1)
+    return float(lat.strip()), float(lon.strip())
+
+
+def nearest_point_index(points, target):
+    """Find nearest geometry point to target coordinate."""
+    return min(
+        range(len(points)),
+        key=lambda i: haversine_m(points[i], target),
+    )
+
+
 def apply_overrides(trip_shape, trip_line, shapes, overrides):
     """
-    Apply manual geometry overrides.
-
-    Supported operations:
-      - replace: replace a shape with a manually supplied point list
-      - splice: replace a section of a shape with manually supplied points
+    Supports:
+      - replace: manually replace complete geometry
+      - splice: replace geometry section between from and to,
+                inserting via points.
     """
-    rules = overrides.get("overrides", [])
+
+    rules = overrides.get("overrides", overrides if isinstance(overrides, list) else [])
 
     for rule in rules:
-        operation = rule.get("type", rule.get("operation", "replace"))
+        if not rule.get("enabled", True):
+            continue
+
+        match = rule.get("match", {})
 
         matching = []
 
         for trip_id, shape_id in trip_shape.items():
             line = trip_line.get(trip_id, "")
 
-            if matches_override(rule, trip_id, line, shape_id):
-                matching.append(shape_id)
+            if match.get("lines") and line not in match["lines"]:
+                continue
+
+            if match.get("trip_ids") and trip_id not in match["trip_ids"]:
+                continue
+
+            if match.get("shape_ids") and shape_id not in match["shape_ids"]:
+                continue
+
+            matching.append(shape_id)
 
         if not matching:
             continue
 
-        points = rule.get("points")
+        # REPLACE
+        if "replace" in rule:
+            replacement = [
+                parse_coord(point)
+                for point in rule["replace"]
+            ]
 
-        if not points:
-            log(f"Override přeskočen – chybí points: {rule}")
+            for shape_id in set(matching):
+                shapes[shape_id] = replacement
+
+            log(
+                f"Override replace: {len(set(matching))} tvarů "
+                f"({rule.get('comment', '')})"
+            )
             continue
 
-        normalized = [
-            (float(point[0]), float(point[1]))
-            for point in points
-        ]
+        # SPLICE
+        if "splice" in rule:
+            splice = rule["splice"]
 
-        for shape_id in set(matching):
-            if operation == "replace":
-                shapes[shape_id] = normalized
+            if not splice.get("from") or not splice.get("to"):
+                log("Override splice přeskočen – chybí from/to")
+                continue
 
-            elif operation == "splice":
+            start_coord = parse_coord(splice["from"])
+            end_coord = parse_coord(splice["to"])
+
+            via = [
+                parse_coord(point)
+                for point in splice.get("via", [])
+            ]
+
+            replacement = [start_coord] + via + [end_coord]
+
+            changed = 0
+
+            for shape_id in set(matching):
                 original = shapes.get(shape_id)
 
-                if not original:
+                if not original or len(original) < 2:
                     continue
 
-                start = int(rule.get("start", 0))
-                end = int(rule.get("end", len(original)))
-
-                start = max(0, min(start, len(original)))
-                end = max(start, min(end, len(original)))
-
-                shapes[shape_id] = (
-                    original[:start]
-                    + normalized
-                    + original[end:]
+                start_index = nearest_point_index(
+                    original,
+                    start_coord,
                 )
 
-            else:
-                log(f"Neznámý typ override: {operation}")
+                end_index = nearest_point_index(
+                    original,
+                    end_coord,
+                )
+
+                # Pokud jsou body v opačném pořadí,
+                # obrátíme geometrii, provedeme splice
+                # a následně ji vrátíme do původního směru.
+                reverse = start_index > end_index
+
+                points = (
+                    list(reversed(original))
+                    if reverse
+                    else original
+                )
+
+                if reverse:
+                    start_index = len(original) - 1 - start_index
+                    end_index = len(original) - 1 - end_index
+
+                if start_index >= end_index:
+                    continue
+
+                shapes[shape_id] = (
+                    points[:start_index]
+                    + replacement
+                    + points[end_index + 1:]
+                )
+
+                if reverse:
+                    shapes[shape_id] = list(
+                        reversed(shapes[shape_id])
+                    )
+
+                changed += 1
+
+            log(
+                f"Override splice: {changed} tvarů "
+                f"({rule.get('comment', '')})"
+            )
+            continue
+
+        log(
+            f"Override přeskočen – neznámá operace: "
+            f"{rule.get('comment', '')}"
+        )
+
 
 
 def main():
