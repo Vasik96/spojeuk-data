@@ -230,6 +230,8 @@ def main():
     ap.add_argument("--prev", help="shapes.json předchozí verze (kontrola, že nový build není podezřele malý)")
     ap.add_argument("--min-ratio", type=float, default=0.9)
     ap.add_argument("--min-trips", type=int, default=1000)
+    ap.add_argument("--force", action="store_true",
+                help="Přeskočí kontroly počtu spojů před publikováním")
     ap.add_argument("--overrides", default="", help="JSON s ručními úpravami tras")
     a = ap.parse_args()
     t0 = time.time()
@@ -324,15 +326,26 @@ def main():
     log(f"Body: {pts_in} -> {pts_out}; spojů s trasou: {len(pairs)}; velikost: {os.path.getsize(a.out) / 1e6:.1f} MB")
 
     # 5) pojistky proti špatnému buildu
-    if len(pairs) < a.min_trips:
-        raise SystemExit(f"Podezřele málo spojů ({len(pairs)} < {a.min_trips}), nepublikuji.")
-    if a.prev and os.path.exists(a.prev):
-        try:
-            prev = json.load(open(a.prev))["trips"]
-            if len(pairs) < prev * a.min_ratio:
-                raise SystemExit(f"Spojů s trasou {len(pairs)} je méně než {a.min_ratio:.0%} z minula ({prev}), nepublikuji.")
-        except (ValueError, KeyError):
-            log("prev meta nečitelná, kontrola přeskočena")
+    if a.force:
+        log("FORCE: kontroly počtu spojů přeskočeny, pokračuji v publikování.")
+    else:
+        if len(pairs) < a.min_trips:
+            raise SystemExit(
+                f"Podezřele málo spojů ({len(pairs)} < {a.min_trips}), nepublikuji."
+            )
+
+        if a.prev and os.path.exists(a.prev):
+            try:
+                with open(a.prev, encoding="utf-8") as f:
+                    prev = json.load(f)["trips"]
+
+                if len(pairs) < prev * a.min_ratio:
+                    raise SystemExit(
+                        f"Spojů s trasou {len(pairs)} je méně než "
+                        f"{a.min_ratio:.0%} z minula ({prev}), nepublikuji."
+                    )
+            except (ValueError, KeyError):
+                log("prev meta nečitelná, kontrola přeskočena")
 
     sha = hashlib.sha256(open(a.out, "rb").read()).hexdigest()
     json.dump({"schema": 1, "built": built, "upstream": a.upstream, "trips": len(pairs),

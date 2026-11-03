@@ -1,4 +1,17 @@
-name: Build shapes
+- name: Postavit shapes.sqlite
+  if: steps.need.outputs.build == 'true'
+  run: |
+    FORCE_ARG=""
+    if [ "${{ github.event.inputs.force }}" = "true" ]; then
+      FORCE_ARG="--force"
+    fi
+
+    python tools/build_shapes.py \
+      --full work/jdf.tar --filtered work/jdf-filtered.tar \
+      --out work/shapes.sqlite --meta work/shapes.json \
+      --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json \
+      --overrides tools/shape_overrides.json \
+      $FORCE_ARG
 
 on:
   schedule:
