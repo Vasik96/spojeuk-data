@@ -1,77 +1,179 @@
-name: Build shapes
+
+name: Build shapes database
 
 on:
-  schedule:
-    - cron: "30 6 * * 1"
-  push:
-    branches: [main]
-    paths:
-      - "tools/shape_overrides.json"
-      - "tools/build_shapes.py"
   workflow_dispatch:
     inputs:
       force:
-        description: "Postavit i když se upstream nezměnil"
-        type: boolean
+        description: Force rebuild
+        required: false
         default: false
+        type: boolean
+
+  schedule:
+    - cron: "30 6 * * 1"
+
+  push:
+    paths:
+      - "tools/shape_overrides.json"
+      - "tools/build_shapes.py"
+      - ".github/workflows/shapes.yml"
 
 permissions:
-  contents: write                # vytvoření/aktualizace release "shapes"
+  contents: write
 
-concurrency: shapes
+concurrency:
+  group: build-shapes
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: Sap1k/obehy
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      GH_TOKEN: ${{ github.token }}
-      UPSTREAM: Sap1k/obehy
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Zjistit, jestli je co stavět
+      - name: Zjistit poslední upstream release
         id: need
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG="$(gh release view --repo "$UPSTREAM" --json tagName --jq .tagName)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          mkdir -p work
+
+          PREV_TAG=""
+          PREV_OVERRIDES=""
+
+          if gh release download shapes \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern shapes.json \
+            --dir work/previous 2>/dev/null; then
+
+            if [ -f work/previous/shapes.json ]; then
+              PREV_TAG="$(python -c 'import json; print(json.load(open("work/previous/shapes.json")).get("upstream", ""))')"
+              PREV_OVERRIDES="$(python -c 'import json; print(json.load(open("work/previous/shapes.json")).get("overrides_sha", ""))')"
+            fi
+          fi
+
+          OVERRIDES_SHA=""
+
+          if [ -f tools/shape_overrides.json ]; then
+            OVERRIDES_SHA="$(sha256sum tools/shape_overrides.json | cut -d ' ' -f 1)"
+          fi
+
+          echo "Upstream tag: $TAG"
+          echo "Previous tag: $PREV_TAG"
+          echo "Previous overrides: $PREV_OVERRIDES"
+          echo "Current overrides: $OVERRIDES_SHA"
+
+          BUILD=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            BUILD=true
+          elif [ "$TAG" != "$PREV_TAG" ] || [ "$OVERRIDES_SHA" != "$PREV_OVERRIDES" ]; then
+            BUILD=true
+          fi
+
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "overrides_sha=$OVERRIDES_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Připravit výstup
+        if: steps.need.outputs.build == 'true'
         run: |
           mkdir -p work
-          UP_TAG=$(gh release view -R "$UPSTREAM" --json tagName -q .tagName)
-          OV_SHA=$(sha256sum tools/shape_overrides.json 2>/dev/null | cut -d' ' -f1 || true)
-          PREV_TAG=""; PREV_OV=""
-          if gh release download shapes -p shapes.json -D work --clobber 2>/dev/null; then
-            PREV_TAG=$(jq -r '.upstream // ""' work/shapes.json)
-            PREV_OV=$(jq -r '.overrides // ""' work/shapes.json)
-            mv work/shapes.json work/prev.json
-          fi
-          echo "tag=$UP_TAG" >> "$GITHUB_OUTPUT"
-          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "$OV_SHA" != "$PREV_OV" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Nic se nezměnilo, nic se nedělá."
-          fi
+
+      - name: Stáhnout předchozí metadata
+        if: steps.need.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download shapes \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern shapes.json \
+            --dir work 2>/dev/null || true
 
       - name: Stáhnout data obehy
         if: steps.need.outputs.build == 'true'
-        run: gh release download "${{ steps.need.outputs.tag }}" -R "$UPSTREAM" -p jdf.tar -p jdf-filtered.tar -D work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh release download "${{ steps.need.outputs.tag }}" \
+            --repo "$UPSTREAM" \
+            --pattern jdf.tar \
+            --pattern jdf-filtered.tar \
+            --pattern czptt.tar \
+            --dir work
 
       - name: Postavit shapes.sqlite
         if: steps.need.outputs.build == 'true'
         run: |
+          set -euo pipefail
+
           python tools/build_shapes.py \
-            --full work/jdf.tar --filtered work/jdf-filtered.tar \
-            --out work/shapes.sqlite --meta work/shapes.json \
-            --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json \
+            --full work/jdf.tar \
+            --filtered work/jdf-filtered.tar \
+            --trains work/czptt.tar \
+            --out work/shapes.sqlite \
+            --meta work/shapes.json \
+            --upstream "${{ steps.need.outputs.tag }}" \
+            --prev work/shapes.json \
             --overrides tools/shape_overrides.json
 
-      - name: Publikovat
+      - name: Doplnit metadata
         if: steps.need.outputs.build == 'true'
         run: |
-          gh release view shapes >/dev/null 2>&1 || \
-            gh release create shapes --title "Shapes (automaticky)" \
-              --notes "Trasy spojů generované workflow Build shapes. Needitovat ručně." --latest=false
-          gh release upload shapes work/shapes.sqlite --clobber
-          gh release upload shapes work/shapes.json --clobber
+          python - <<'PY'
+          import json
+          import os
+
+          path = "work/shapes.json"
+
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+          data["overrides_sha"] = "${{ steps.need.outputs.overrides_sha }}"
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Publikovat shapes release
+        if: steps.need.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view shapes --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload shapes \
+              work/shapes.sqlite \
+              work/shapes.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create shapes \
+              work/shapes.sqlite \
+              work/shapes.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Shapes database" \
+              --notes "Automaticky generovaná databáze geometrií spojů."
+          fi
+
+      - name: Build skipped
+        if: steps.need.outputs.build != 'true'
+        run: echo "Shapes jsou aktuální, není potřeba je přestavovat."
