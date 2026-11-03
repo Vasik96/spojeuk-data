@@ -717,13 +717,23 @@ def main():
         finally:
             connection.close()
 
-        # 9) Metadata JSON.
+        # 9) Metadata JSON
+        sha256 = hashlib.sha256()
+
+        with open(args.out, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha256.update(chunk)
+
         metadata = {
+            "built": args.upstream,
             "upstream": args.upstream,
+            "trips": len(mapped_trips),
             "trip_count": len(mapped_trips),
+            "shapes": len(shape_ids),
             "shape_count": len(shape_ids),
             "jdf_shape_count": len(jdf_need),
             "train_shape_count": len(train_need),
+            "sha256": sha256.hexdigest(),
             "bbox": list(BBOX),
             "margin": MARGIN,
             "epsilon_m": EPS_M,
@@ -732,12 +742,7 @@ def main():
         os.makedirs(os.path.dirname(os.path.abspath(args.meta)), exist_ok=True)
 
         with open(args.meta, "w", encoding="utf-8") as file:
-            json.dump(
-                metadata,
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
+            json.dump(metadata, file, ensure_ascii=False, indent=2)
 
         log("Hotovo.")
         log(f"Výstup: {args.out}")
