@@ -1,17 +1,4 @@
-- name: Postavit shapes.sqlite
-  if: steps.need.outputs.build == 'true'
-  run: |
-    FORCE_ARG=""
-    if [ "${{ github.event.inputs.force }}" = "true" ]; then
-      FORCE_ARG="--force"
-    fi
-
-    python tools/build_shapes.py \
-      --full work/jdf.tar --filtered work/jdf-filtered.tar \
-      --out work/shapes.sqlite --meta work/shapes.json \
-      --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json \
-      --overrides tools/shape_overrides.json \
-      $FORCE_ARG
+name: Build shapes
 
 on:
   schedule:
@@ -29,7 +16,7 @@ on:
         default: false
 
 permissions:
-  contents: write                # vytvoření/aktualizace release "shapes"
+  contents: write
 
 concurrency: shapes
 
@@ -74,11 +61,17 @@ jobs:
       - name: Postavit shapes.sqlite
         if: steps.need.outputs.build == 'true'
         run: |
+          FORCE_ARG=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            FORCE_ARG="--force"
+          fi
+
           python tools/build_shapes.py \
             --full work/jdf.tar --filtered work/jdf-filtered.tar \
             --out work/shapes.sqlite --meta work/shapes.json \
             --upstream "${{ steps.need.outputs.tag }}" --prev work/prev.json \
-            --overrides tools/shape_overrides.json
+            --overrides tools/shape_overrides.json \
+            $FORCE_ARG
 
       - name: Publikovat
         if: steps.need.outputs.build == 'true'
