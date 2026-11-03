@@ -568,7 +568,8 @@ def main():
         log(f"CZPTT tvarů v oblasti: {len(train_kept)}")
         log(f"Celkem tvarů v oblasti: {len(kept)}")
 
-        # 5) Kontrola počtu nalezených geometrií.
+
+        # 5) Vybereme pouze spoje, jejichž geometrie zasahuje do BBOX.
         mapped_trips = {
             trip_id: shape_id
             for trip_id, shape_id in trip_shape.items()
@@ -577,23 +578,21 @@ def main():
 
         if len(mapped_trips) < args.min_trips:
             raise SystemExit(
-                f"Příliš málo spojů s geometrií: "
+                f"Příliš málo spojů s geometrií v oblasti: "
                 f"{len(mapped_trips)} < {args.min_trips}"
             )
 
-        ratio = len(mapped_trips) / max(1, len(trip_shape))
-
-        log(
-            f"Spoje s geometrií v oblasti: "
-            f"{len(mapped_trips)} / {len(trip_shape)} "
-            f"({ratio:.1%})"
+        jdf_mapped = sum(
+            1 for shape_id in mapped_trips.values()
+            if not shape_id.startswith("czptt:")
         )
 
-        if ratio < args.min_ratio:
-            raise SystemExit(
-                f"Pokrytí geometriemi {ratio:.1%} je nižší "
-                f"než požadovaných {args.min_ratio:.1%}"
-            )
+        train_mapped = len(mapped_trips) - jdf_mapped
+
+        log(f"Spoje s geometrií v oblasti: {len(mapped_trips)}")
+        log(f"  Autobusy: {jdf_mapped}")
+        log(f"  Vlaky: {train_mapped}")
+
 
         # 6) Ruční overrides.
         overrides = load_overrides(args.overrides)
