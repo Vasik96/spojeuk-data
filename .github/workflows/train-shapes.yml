@@ -1,0 +1,20 @@
+# Do repozitáře Vasik96/spojeuk-data: jednou denně postaví train_shapes.sqlite z nejnovějšího czptt.tar
+# (Sap1k/obehy) a nahraje ho do releasu "shapes" vedle shapes.sqlite. Skript je tools/build_train_shapes.py.
+name: Build train shapes
+on:
+  schedule: [{ cron: "30 5 * * *" }]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download czptt.tar
+        run: curl -fsSL -o czptt.tar https://github.com/Sap1k/obehy/releases/latest/download/czptt.tar
+      - name: Build
+        run: python3 tools/build_train_shapes.py czptt.tar -o out
+      - name: Upload to release "shapes"
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release upload shapes out/train_shapes.sqlite out/train_shapes.json --clobber
