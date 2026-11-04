@@ -1,0 +1,29 @@
+# Denně zmenší GTFS z Oběhů (jdf-filtered + czptt) na oblast a nahraje do releasu "gtfs".
+# Appka pak stahuje ~5 MB místo ~120 MB. Release "gtfs" musí existovat (gh release create gtfs --notes "GTFS pro appku").
+name: Build region GTFS
+on:
+  schedule: [{ cron: "15 5 * * *" }]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stáhnout Oběhy
+        run: |
+          B=https://github.com/Sap1k/obehy/releases/latest/download
+          curl -fsSL -o jdf.tar   $B/jdf-filtered.tar
+          curl -fsSL -o czptt.tar $B/czptt.tar
+          # tag buildu, ze kterého to je (pro kontrolu "je to nové?" v appce)
+          curl -fsSI -o /dev/null -w '%{redirect_url}' $B/czptt.tar | sed -E 's#.*/download/([^/]+)/.*#\1#' > tag.txt
+      - name: Zmenšit na oblast (rozsahy = Config.kt)
+        run: |
+          mkdir -p out
+          python3 tools/build_region_gtfs.py jdf.tar   out/jdf-region.zip   --lat 50.45 50.85 --lon 13.75 14.40
+          python3 tools/build_region_gtfs.py czptt.tar out/czptt-region.zip --lat 50.10 51.10 --lon 12.90 14.60
+          printf '{"tag":"%s","built":"%s"}' "$(cat tag.txt)" "$(date -u +%FT%TZ)" > out/gtfs.json
+      - name: Nahrát do releasu "gtfs"
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release upload gtfs out/jdf-region.zip out/czptt-region.zip out/gtfs.json --clobber
