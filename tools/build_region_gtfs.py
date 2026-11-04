@@ -24,7 +24,10 @@ def main():
     ap.add_argument("src"); ap.add_argument("out")
     ap.add_argument("--lat", nargs=2, type=float, required=True)
     ap.add_argument("--lon", nargs=2, type=float, required=True)
+    ap.add_argument("--from-date", help="YYYYMMDD; starší dny a spoje, které už nejedou, se zahodí (výchozí: včera)")
     a = ap.parse_args()
+    from datetime import date, timedelta
+    from_date = a.from_date or (date.today() - timedelta(days=1)).strftime("%Y%m%d")
 
     with tempfile.TemporaryDirectory() as tmp:
         src = a.src
@@ -49,10 +52,24 @@ def main():
             return bool(c) and a.lat[0] <= c[0] <= a.lat[1] and a.lon[0] <= c[1] <= a.lon[1]
         region = {s for s in parent if inreg(s)}
 
-        # 1. průchod: které spoje se oblasti dotknou
+        # živé služby: jedou ještě někdy od from_date (rozsah v calendar.txt nebo datum v calendar_dates.txt)
+        alive = set()
+        h, r = rows(zf, "calendar.txt")
+        if h is not None:
+            k, e = h.index("service_id"), h.index("end_date")
+            alive |= {x[k] for x in r if x[e] >= from_date}
+        h, r = rows(zf, "calendar_dates.txt")
+        if h is not None:
+            k, d, t = h.index("service_id"), h.index("date"), h.index("exception_type")
+            alive |= {x[k] for x in r if x[d] >= from_date and x[t] == "1"}
+
+        h, r = rows(zf, "trips.txt"); ti0, sv0 = h.index("trip_id"), h.index("service_id")
+        candidate = {x[ti0] for x in r if x[sv0] in alive}
+
+        # 1. průchod: které živé spoje se oblasti dotknou
         h, r = rows(zf, "stop_times.txt")
         ti, si = h.index("trip_id"), h.index("stop_id")
-        keep = {x[ti] for x in r if x[si] in region}
+        keep = {x[ti] for x in r if x[ti] in candidate and x[si] in region}
 
         # 2. průchod: jejich stop_times + použité zastávky
         out = zipfile.ZipFile(a.out, "w", zipfile.ZIP_DEFLATED, compresslevel=9)
@@ -104,11 +121,12 @@ def main():
             h, r = rows(zf, name)
             if h is None: continue
             k = h.index("service_id"); buf, w = writer(name, h)
+            di = h.index("date") if name == "calendar_dates.txt" else None
             for x in r:
-                if x[k] in services: w.writerow(x)
+                if x[k] in services and (di is None or x[di] >= from_date): w.writerow(x)
             out.writestr(name, buf.getvalue())
         out.close()
-    print(f"spojů: {len(keep)}, zastávek: {len(need)}, {os.path.getsize(a.out)//1024} kB", file=sys.stderr)
+    print(f"od {from_date}, spojů: {len(keep)}, zastávek: {len(need)}, {os.path.getsize(a.out)//1024} kB", file=sys.stderr)
 
 
 if __name__ == "__main__":
