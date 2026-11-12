@@ -11,10 +11,39 @@ Jen stdlib. Čte po řádcích, paměť v řádu desítek MB.
 """
 import argparse, csv, hashlib, io, json, math, os, sqlite3, sys, tarfile, time, zipfile, zlib
 from datetime import datetime, timezone
+import re
+from collections import Counter
+
 
 BBOX = (50.45, 50.85, 13.75, 14.40)   # stejné jako BBOX_LAT / BBOX_LON v appce
 MARGIN = 0.02                         # ~2 km, ať se nepřijde o trasy těsně u okraje
 EPS_M = 3.0                           # zjednodušení tvaru (Douglas-Peucker)
+
+
+_TRIP = re.compile(r"^jdf:trip:([^:]+):(\d{6})(:det)?(?::|$)")
+
+
+def trip_group(tid):
+    m = _TRIP.match(tid)
+    return (m.group(1), m.group(2) + (" výluka" if m.group(3) else "")) if m else ("?", "?")
+
+
+def report_unshaped(wanted, in_full, trip_shape, kept, full_groups, log, top=15):
+    reasons = {}
+    for t in wanted:
+        s = trip_shape.get(t)
+        if s is not None and s in kept:
+            continue
+        reasons[t] = ("není v plném feedu" if t not in in_full
+                     else "v plném feedu bez shape_id" if s is None
+                     else "tvar mimo oblast / chybí v shapes.txt")
+    log(f"Spojů BEZ tvaru: {len(reasons)} z {len(wanted)}")
+    for r, n in Counter(reasons.values()).most_common():
+        log(f"  {n:6d}  {r}")
+    groups = Counter((*trip_group(t), r) for t, r in reasons.items())
+    log("Nejčastější (linka, verze, důvod) + kolik spojů té verze má plný feed:")
+    for (line, ver, r), n in groups.most_common(top):
+        log(f"  linka {line} verze {ver}: {n} spojů bez tvaru ({r}); plný feed má této verze {full_groups.get((line, ver), 0)}")
 
 
 def log(*a):
@@ -255,10 +284,13 @@ def main():
     # 2) jejich shape_id z plného feedu
     ix, r = rows(zf, "trips.txt")
     c_t, c_s = ix["trip_id"], ix["shape_id"]
-    trip_shape = {}
+    trip_shape, in_full, full_groups = {}, set(), Counter()
     for row in r:
-        if row[c_t] in wanted and row[c_s]:
-            trip_shape[row[c_t]] = row[c_s]
+        full_groups[trip_group(row[c_t])] += 1
+        if row[c_t] in wanted:
+            in_full.add(row[c_t])
+            if row[c_s]:
+                trip_shape[row[c_t]] = row[c_s]
     ratio_found = len(trip_shape) / max(1, len(wanted))
     log(f"Z nich s tvarem v plném feedu: {len(trip_shape)} ({ratio_found:.0%})")
     if ratio_found < 0.5:
@@ -295,6 +327,7 @@ def main():
             hit = True
     flush()
     log(f"Tvarů v oblasti: {len(kept)}")
+    report_unshaped(wanted, in_full, trip_shape, kept, full_groups, log)
     ovs, ov_sha = load_overrides(a.overrides)
     if ovs:
         kept, trip_shape = apply_overrides(ovs, kept, trip_shape, trip_line)
@@ -357,4 +390,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
