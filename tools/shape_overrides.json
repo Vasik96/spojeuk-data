@@ -55,7 +55,7 @@
     {
       "comment": "linka 70, 71 krasne brezno zastavka fix",
       "enabled": true,
-      "match": { "lines": ["70", "71"] },
+      "match": { "lines": ["70", "71", "74"] },
       "splice": {
         "from": "50.666021, 14.0798331",
         "to":   "50.6658814, 14.0807507"
@@ -83,7 +83,7 @@
     {
       "comment": "linka 79 kaufland - u hranicare, opecnej smer",
       "enabled": true,
-      "match": { "lines": ["79"] },
+      "match": { "lines": ["79", "83"] },
       "splice": {
         "from": "50.663723, 14.026554",
         "to": "50.66231, 14.034",
@@ -100,18 +100,18 @@
       }
     },
     {
-      "comment": "linka 75 vseborice",
+      "comment": "linka 75, 74 vseborice",
       "enabled": true,
-      "match": { "lines": ["75"] },
+      "match": { "lines": ["75", "74"] },
       "splice": {
         "from": "50.68142, 14.011724",
         "to":   "50.68099, 14.0108312"
       }
     },
     {
-      "comment": "linka 75 vseborice, opacny smer",
+      "comment": "linka 75, 74 vseborice, opacny smer",
       "enabled": true,
-      "match": { "lines": ["75"] },
+      "match": { "lines": ["75", "74"] },
       "splice": {
         "from": "50.68099, 14.01083",
         "to": "50.68142, 14.01172"
