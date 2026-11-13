@@ -1,9 +1,9 @@
 {
   "overrides": [
     {
-      "comment": "Linka 81 u hl. nádraží divně, správně je zabočení doleva nahoru a pak doprava a pak rovně",
+      "comment": "taková ta divna vec u hlavniho nadrazi v usti",
       "enabled": true,
-      "match": { "lines": ["81", "83", "89", "79", "452", "450"] },
+      "match": { "lines": ["81", "83", "89", "79", "452", "450", "453"] },
       "splice": {
         "from": "50.660212, 14.0450955",
         "to":   "50.660701, 14.048446",
@@ -50,6 +50,15 @@
           "50.6595511, 14.045922",
           "50.659243, 14.04517254"
         ]
+      }
+    },
+    {
+      "comment": "linka 70 krasne brezno zastavka fix",
+      "enabled": true,
+      "match": { "lines": ["70"] },
+      "splice": {
+        "from": "50.666021, 14.0798331",
+        "to":   "50.6658814, 14.0807507"
       }
     }
   ]
