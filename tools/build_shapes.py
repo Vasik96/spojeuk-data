@@ -200,6 +200,26 @@ def _matches(o, tid, sid, line):
     return bool(conds) and all(conds)
 
 
+def _project(pts, p, start=0, min_t=0.0):
+    """Nejbližší bod na LOMENÉ ČÁŘE (ne jen na vrcholu): (vzdálenost m, index úsečky, t 0..1, bod).
+    Hledá od úsečky `start`; v úsečce `start` jen za parametrem `min_t`."""
+    kx = 111320.0 * math.cos(math.radians(p[0]))
+    ky = 110540.0
+    px, py = p[1] * kx, p[0] * ky
+    best = None
+    for k in range(start, len(pts) - 1):
+        ax, ay = pts[k][1] * kx, pts[k][0] * ky
+        dx, dy = pts[k + 1][1] * kx - ax, pts[k + 1][0] * ky - ay
+        l2 = dx * dx + dy * dy
+        t = 0.0 if l2 == 0 else ((px - ax) * dx + (py - ay) * dy) / l2
+        t = max(min_t if k == start else 0.0, min(1.0, t))
+        d = math.hypot(ax + t * dx - px, ay + t * dy - py)
+        if best is None or d < best[0]:
+            q = (pts[k][0] + t * (pts[k + 1][0] - pts[k][0]), pts[k][1] + t * (pts[k + 1][1] - pts[k][1]))
+            best = (d, k, t, q)
+    return best
+
+
 def _apply_one(o, pts):
     if "replace" in o:
         return [parse_pt(p) for p in o["replace"]]
@@ -207,13 +227,15 @@ def _apply_one(o, pts):
     tol = float(o.get("tolerance_m", 80))
     frm, to = parse_pt(s["from"]), parse_pt(s["to"])
     via = [parse_pt(p) for p in s.get("via", [])]
-    i = min(range(len(pts)), key=lambda k: dist_m(pts[k], frm))
-    if dist_m(pts[i], frm) > tol or i + 1 >= len(pts):
+    # from/to se přichytí na nejbližší bod na úsečce trasy (ne na nejbližší vrchol:
+    # trasa má na rovinkách vrcholy daleko od sebe), odtud vede rovná čára přes via k bodu to
+    a = _project(pts, frm)
+    if a is None or a[0] > tol:
         return None
-    j = min(range(i + 1, len(pts)), key=lambda k: dist_m(pts[k], to))
-    if dist_m(pts[j], to) > tol:
+    b = _project(pts, to, start=a[1], min_t=a[2])
+    if b is None or b[0] > tol or (b[1], b[2]) <= (a[1], a[2]):
         return None
-    return pts[:i + 1] + via + pts[j:]
+    return pts[:a[1] + 1] + [a[3]] + via + [b[3]] + pts[b[1] + 1:]
 
 
 def apply_overrides(ovs, kept, trip_shape, trip_line):
