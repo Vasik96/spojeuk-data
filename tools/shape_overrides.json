@@ -19,6 +19,18 @@
       }
     },
     {
+      "comment": "81 - rodinova",
+      "enabled": true,
+      "match": { "lines": ["81"] },
+      "splice": {
+        "from": "50.627806, 14.065493",
+        "to":   "50.62788, 14.06661",
+        "via":  [
+          "50.627814, 14.06598"
+        ]
+      }
+    },
+    {
       "comment": "85 směrem Z VAŇOVA fix",
       "enabled": true,
       "match": { "lines": ["85"] },
