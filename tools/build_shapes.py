@@ -7,6 +7,8 @@ Výstup: --out shapes.sqlite  + --meta shapes.json (verze, počty, sha256)
 
 Schéma:  shape(id, pts BLOB)  a  trip_shape(gid TEXT = GTFS trip_id, shape INTEGER)
 pts = zlib( varint(počet) + zigzag-varint delty lat/lon v mikrostupních ), viz ShapeStore.kt.
+Tvary se NEořezávají na oblast: uloží se každý tvar, který potřebuje některý spoj
+z filtrovaného feedu.
 Jen stdlib. Čte po řádcích, paměť v řádu desítek MB.
 """
 import argparse, csv, hashlib, io, json, math, os, sqlite3, sys, tarfile, time, zipfile, zlib
@@ -15,8 +17,6 @@ import re
 from collections import Counter
 
 
-BBOX = (50.45, 50.85, 13.75, 14.40)   # stejné jako BBOX_LAT / BBOX_LON v appce
-MARGIN = 0.02                         # ~2 km, ať se nepřijde o trasy těsně u okraje
 EPS_M = 3.0                           # zjednodušení tvaru (Douglas-Peucker)
 
 
@@ -36,7 +36,7 @@ def report_unshaped(wanted, in_full, trip_shape, kept, full_groups, log, top=15)
             continue
         reasons[t] = ("není v plném feedu" if t not in in_full
                      else "v plném feedu bez shape_id" if s is None
-                     else "tvar mimo oblast / chybí v shapes.txt")
+                     else "tvar chybí v shapes.txt nebo má méně než 2 body")
     log(f"Spojů BEZ tvaru: {len(reasons)} z {len(wanted)}")
     for r, n in Counter(reasons.values()).most_common():
         log(f"  {n:6d}  {r}")
@@ -319,16 +319,14 @@ def main():
         raise SystemExit("Většina trip_id se v plném feedu nenašla, změnilo se číslování? Končím.")
     need = set(trip_shape.values())
 
-    # 3) tvary: jen ty, které zasahují do oblasti
-    la0, la1, lo0, lo1 = BBOX
-    la0 -= MARGIN; la1 += MARGIN; lo0 -= MARGIN; lo1 += MARGIN
+    # 3) tvary: všechny, které potřebují spoje z filtrovaného feedu (bez ořezu na oblast)
     ix, r = rows(zf, "shapes.txt")
     c_i, c_la, c_lo, c_q = ix["shape_id"], ix["shape_pt_lat"], ix["shape_pt_lon"], ix["shape_pt_sequence"]
     kept, finished = {}, set()
-    cur, buf, hit = None, [], False
+    cur, buf = None, []
 
     def flush():
-        if cur is not None and cur in need and hit and len(buf) >= 2:
+        if cur is not None and cur in need and len(buf) >= 2:
             buf.sort(key=lambda x: x[0])
             kept[cur] = [(la, lo) for _, la, lo in buf]
 
@@ -340,15 +338,12 @@ def main():
                 finished.add(cur)
             if sid in finished:
                 raise SystemExit(f"shapes.txt není seřazený podle shape_id ({sid} se vrací), končím.")
-            cur, buf, hit = sid, [], False
+            cur, buf = sid, []
         if sid not in need:
             continue
-        la, lo = float(row[c_la]), float(row[c_lo])
-        buf.append((int(row[c_q]), la, lo))
-        if not hit and la0 <= la <= la1 and lo0 <= lo <= lo1:
-            hit = True
+        buf.append((int(row[c_q]), float(row[c_la]), float(row[c_lo])))
     flush()
-    log(f"Tvarů v oblasti: {len(kept)}")
+    log(f"Tvarů: {len(kept)}")
     report_unshaped(wanted, in_full, trip_shape, kept, full_groups, log)
     ovs, ov_sha = load_overrides(a.overrides)
     if ovs:
