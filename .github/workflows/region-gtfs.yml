@@ -1,5 +1,7 @@
-# Denně zmenší GTFS z Oběhů (jdf-filtered + czptt) a nahraje do releasu "gtfs".
+# Denně zmenší GTFS z Oběhů (jdf-filtered + PID z plného jdf + czptt) a nahraje do releasu "gtfs".
 # Rozsah pokrývá celé Česko (spoj se bere celý, když se oblasti dotkne).
+# jdf-filtered vyhazuje linky PID ("už je publikují jiné feedy"), proto se PID dobírá z plného jdf.tar
+# (tools/add_pid_lines.py); bez toho appka pro PID vozidla nemá spoje ani trasy.
 name: Build region GTFS
 on:
   schedule: [{ cron: "15 5 * * *" }]
@@ -12,7 +14,7 @@ jobs:
     env:
       LAT: "48.0 51.5"
       LON: "11.5 19.5"
-      REGION: cz   # změň při další úpravě oblasti, ať si appka stáhne nová data
+      REGION: cz-pid   # změň při další úpravě oblasti nebo obsahu, ať si appka stáhne nová data
     steps:
       - uses: actions/checkout@v4
       - name: Stáhnout Oběhy
@@ -20,11 +22,16 @@ jobs:
           B=https://github.com/Sap1k/obehy/releases/latest/download
           curl -fsSL -o jdf.tar   $B/jdf-filtered.tar
           curl -fsSL -o czptt.tar $B/czptt.tar
+          curl -fsSL -o jdf-full.tar $B/jdf.tar      # ~1 GB, jen kvůli spojům PID
           curl -fsSI -o /dev/null -w '%{redirect_url}' $B/czptt.tar | sed -E 's#.*/download/([^/]+)/.*#\1#' > tag.txt
+      - name: Přidat PID do filtrovaného JDF
+        run: |
+          python3 tools/add_pid_lines.py jdf.tar jdf-full.tar jdf-with-pid.zip
+          rm -f jdf-full.tar
       - name: Zmenšit na oblast
         run: |
           mkdir -p out
-          python3 tools/build_region_gtfs.py jdf.tar   out/jdf-region.zip   --lat $LAT --lon $LON
+          python3 tools/build_region_gtfs.py jdf-with-pid.zip out/jdf-region.zip --lat $LAT --lon $LON
           python3 tools/build_region_gtfs.py czptt.tar out/czptt-region.zip --lat $LAT --lon $LON
           printf '{"tag":"%s-%s","built":"%s"}' "$(cat tag.txt)" "$REGION" "$(date -u +%FT%TZ)" > out/gtfs.json
       - name: Nahrát do releasu "gtfs"

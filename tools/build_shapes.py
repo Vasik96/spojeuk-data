@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 import re
 from collections import Counter
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pid_lines import PID_IDS_CODE, pid_lines_from_tar, route_line
+
 
 EPS_M = 3.0                           # zjednodušení tvaru (Douglas-Peucker)
 
@@ -284,6 +287,9 @@ def main():
     ap.add_argument("--force", action="store_true",
                 help="Přeskočí kontroly počtu spojů před publikováním")
     ap.add_argument("--overrides", default="", help="JSON s ručními úpravami tras")
+    ap.add_argument("--pid-ids-code", default=PID_IDS_CODE,
+                    help="kód IDS PID v line-snapshot.json; spoje PID (jdf-filtered je vyhazuje) se přidají do tras")
+    ap.add_argument("--no-pid", action="store_true", help="nepřidávat spoje PID")
     a = ap.parse_args()
     t0 = time.time()
     work = os.path.dirname(os.path.abspath(a.out))
@@ -303,16 +309,38 @@ def main():
     trip_line = {t: short.get(rid, "") for t, rid in trip_route.items()}
     log(f"Spojů ve filtrovaném feedu: {len(wanted)}")
 
+    # 1b) spoje PID: jdf-filtered je vyhazuje ("už je publikují jiné feedy"), ale appka je potřebuje
+    #     (tools/add_pid_lines.py je přidává do jízdních řádů), takže potřebují i tvary
+    pid_routes, full_short = set(), {}
+    if not a.no_pid:
+        pid_lines = pid_lines_from_tar(a.filtered, a.pid_ids_code)
+        ix, r = rows(zf, "routes.txt")
+        for row in r:
+            rid = row[ix["route_id"]]
+            full_short[rid] = row[ix["route_short_name"]]
+            if route_line(rid) in pid_lines:
+                pid_routes.add(rid)
+        log(f"Linek PID (line-snapshot.json): {len(pid_lines)}, v plném feedu: {len(pid_routes)}")
+
     # 2) jejich shape_id z plného feedu
     ix, r = rows(zf, "trips.txt")
-    c_t, c_s = ix["trip_id"], ix["shape_id"]
+    c_t, c_s, c_r = ix["trip_id"], ix["shape_id"], ix["route_id"]
     trip_shape, in_full, full_groups = {}, set(), Counter()
+    pid_trips = set()
     for row in r:
         full_groups[trip_group(row[c_t])] += 1
-        if row[c_t] in wanted:
+        is_pid = row[c_r] in pid_routes and row[c_t] not in wanted
+        if row[c_t] in wanted or is_pid:
+            if is_pid:
+                pid_trips.add(row[c_t])
+                trip_route[row[c_t]] = row[c_r]
             in_full.add(row[c_t])
             if row[c_s]:
                 trip_shape[row[c_t]] = row[c_s]
+    if pid_trips:
+        wanted |= pid_trips
+        trip_line.update({t: full_short.get(trip_route[t], "") for t in pid_trips})
+        log(f"Spojů PID navíc: {len(pid_trips)} (s tvarem {sum(1 for t in pid_trips if t in trip_shape)})")
     ratio_found = len(trip_shape) / max(1, len(wanted))
     log(f"Z nich s tvarem v plném feedu: {len(trip_shape)} ({ratio_found:.0%})")
     if ratio_found < 0.5:
@@ -398,9 +426,12 @@ def main():
                 log("prev meta nečitelná, kontrola přeskočena")
 
     sha = hashlib.sha256(open(a.out, "rb").read()).hexdigest()
+    here = os.path.dirname(os.path.abspath(__file__))
+    builder = hashlib.sha256(b"".join(open(os.path.join(here, f), "rb").read()
+                                      for f in ("build_shapes.py", "pid_lines.py"))).hexdigest()
     json.dump({"schema": 1, "built": built, "upstream": a.upstream, "trips": len(pairs),
             "shapes": len(sid_of), "size": os.path.getsize(a.out), "sha256": sha,
-            "overrides": ov_sha}, open(a.meta, "w"))
+            "overrides": ov_sha, "builder": builder}, open(a.meta, "w"))
     os.remove(os.path.join(work, "full-gtfs.zip"))
     os.remove(os.path.join(work, "filtered-gtfs.zip"))
     log(f"Hotovo za {time.time() - t0:.0f} s")

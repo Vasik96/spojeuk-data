@@ -8,6 +8,7 @@ on:
     paths:
       - "tools/shape_overrides.json"
       - "tools/build_shapes.py"
+      - "tools/pid_lines.py"
   workflow_dispatch:
     inputs:
       force:
@@ -40,14 +41,17 @@ jobs:
           mkdir -p work
           UP_TAG=$(gh release view -R "$UPSTREAM" --json tagName -q .tagName)
           OV_SHA=$(sha256sum tools/shape_overrides.json 2>/dev/null | cut -d' ' -f1 || true)
-          PREV_TAG=""; PREV_OV=""
+          # změna skriptu = nový build (stejný otisk počítá build_shapes.py do shapes.json)
+          BLD_SHA=$(cat tools/build_shapes.py tools/pid_lines.py | sha256sum | cut -d' ' -f1)
+          PREV_TAG=""; PREV_OV=""; PREV_BLD=""
           if gh release download shapes -p shapes.json -D work --clobber 2>/dev/null; then
             PREV_TAG=$(jq -r '.upstream // ""' work/shapes.json)
             PREV_OV=$(jq -r '.overrides // ""' work/shapes.json)
+            PREV_BLD=$(jq -r '.builder // ""' work/shapes.json)
             mv work/shapes.json work/prev.json
           fi
           echo "tag=$UP_TAG" >> "$GITHUB_OUTPUT"
-          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "$OV_SHA" != "$PREV_OV" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
+          if [ "$UP_TAG" != "$PREV_TAG" ] || [ "$OV_SHA" != "$PREV_OV" ] || [ "$BLD_SHA" != "$PREV_BLD" ] || [ "${{ github.event.inputs.force }}" = "true" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
