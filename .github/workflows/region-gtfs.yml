@@ -44,7 +44,10 @@ jobs:
       # Zipy zůstávají jako záloha (starší verze appky a případ, kdy stažení DB selže).
       - name: Postavit databázi jízdních řádů
         run: |
-          TAG="$(cat tag.txt)-$REGION"
+          # otisk obsahu: appka podle tagu pozná novou verzi; samotný tag obehy se nemění, když se změní jen naše
+          # zpracování (např. doplněné linky PID), a appka by pak nová data nestáhla
+          CONTENT=$(cat out/jdf-region.zip out/czptt-region.zip | sha256sum | cut -c1-10)
+          TAG="$(cat tag.txt)-$REGION-$CONTENT"
           python3 tools/build_timetable_db.py --bus out/jdf-region.zip --rail out/czptt-region.zip --tag "$TAG" --out static.sqlite
           gzip -9 -c static.sqlite > out/timetable.sqlite.gz
           TRIPS=$(python3 -c "import sqlite3; print(sqlite3.connect('static.sqlite').execute('select count(*) from trip').fetchone()[0])")
