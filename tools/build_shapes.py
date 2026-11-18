@@ -274,6 +274,72 @@ def apply_overrides(ovs, kept, trip_shape, trip_line):
     return kept, trip_shape
 
 
+def synthesize_missing_shapes(zf, trip_route, trip_shape, kept, log):
+    """Tvar z polohy zastávek pro spoje, které by jinak zůstaly bez trasy.
+
+    Týká se metra a linek s písmenem v čísle (X9, A/B/C, S/R...): v GTFS často nemají shape_id nebo odkazují na
+    tvar, který v shapes.txt není, a appka pak trasu nemá z čeho nakreslit (OSRM po silnici pro metro nedává
+    smysl). Tvar se sestaví z pořadí zastávek spoje (přímé spojnice) a spoje se stejnou posloupností zastávek
+    ho sdílejí. Běžné autobusy a tramvaje (čistě číselné linky) se nemění, ty řeší appka po silnici sama.
+    """
+    ix, r = rows(zf, "routes.txt")
+    rshort, rtype = {}, {}
+    for row in r:
+        rid = row[ix["route_id"]]
+        rshort[rid] = row[ix["route_short_name"]].strip() if "route_short_name" in ix else ""
+        rtype[rid] = row[ix["route_type"]].strip() if "route_type" in ix else ""
+
+    def special(rid):
+        sn = rshort.get(rid, "")
+        return rtype.get(rid, "") in ("1", "400", "401", "402") or (sn != "" and not sn.isdigit())
+
+    missing = {t for t, rid in trip_route.items()
+               if special(rid) and (t not in trip_shape or trip_shape[t] not in kept)}
+    if not missing:
+        log("Spoje metra / písmenných linek bez tvaru: 0")
+        return
+    log(f"Spoje metra / písmenných linek bez tvaru: {len(missing)}, skládám je ze zastávek")
+
+    ix, r = rows(zf, "stops.txt")
+    c_id, c_la, c_lo = ix["stop_id"], ix["stop_lat"], ix["stop_lon"]
+    coords = {}
+    for row in r:
+        try:
+            coords[row[c_id]] = (float(row[c_la]), float(row[c_lo]))
+        except ValueError:
+            pass
+
+    ix, r = rows(zf, "stop_times.txt")
+    c_t, c_s, c_q = ix["trip_id"], ix["stop_id"], ix["stop_sequence"]
+    acc = {}
+    for row in r:
+        t = row[c_t]
+        if t in missing:
+            acc.setdefault(t, []).append((int(row[c_q]), row[c_s]))
+
+    made, by_line, no_stops = {}, Counter(), 0
+    for t, seq in acc.items():
+        seq.sort()
+        sig = tuple(sid for _, sid in seq)
+        key = "syn:" + hashlib.sha1("|".join(sig).encode()).hexdigest()[:16]
+        if key not in made:
+            pts = []
+            for sid in sig:
+                c = coords.get(sid)
+                if c and (not pts or pts[-1] != c):
+                    pts.append(c)
+            made[key] = pts if len(pts) >= 2 else None
+        if made[key] is None:
+            no_stops += 1
+            continue
+        kept[key] = made[key]
+        trip_shape[t] = key
+        by_line[rshort.get(trip_route[t], "?")] += 1
+    log(f"Tvarů ze zastávek: {sum(1 for v in made.values() if v)}, spojů: {sum(by_line.values())}, "
+        f"bez použitelných zastávek: {no_stops + len(missing - set(acc))}")
+    log("  po linkách: " + ", ".join(f"{ln}={n}" for ln, n in by_line.most_common(20)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", required=True)
@@ -372,6 +438,7 @@ def main():
         buf.append((int(row[c_q]), float(row[c_la]), float(row[c_lo])))
     flush()
     log(f"Tvarů: {len(kept)}")
+    synthesize_missing_shapes(zf, trip_route, trip_shape, kept, log)
     report_unshaped(wanted, in_full, trip_shape, kept, full_groups, log)
     ovs, ov_sha = load_overrides(a.overrides)
     if ovs:
