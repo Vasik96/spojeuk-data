@@ -6,17 +6,24 @@ Stejný formát jako shapes.sqlite, který čte ShapeStore:
   shape(id INTEGER PRIMARY KEY, pts BLOB)       pts = zlib(varint(n) + zigzag-varint delty lat/lon v mikrostupních)
   trip_shape(gid TEXT PRIMARY KEY, shape INTEGER)   gid = trip_id z trips.txt
 
-Bere jen spoje, které se dotknou oblasti (stejný BBOX jako RAIL_BBOX v Config.kt).
+Bere spoje, které se dotknou oblasti (--lat / --lon); výchozí je celé Česko, stejně jako u jízdních řádů
+(workflow region-gtfs.yml). Dřív tu byl napevno jen Ústecký kraj (lat 50,10–51,10), takže vlaky přes Prahu
+a dál (RJ 1050, EN 97443, rj 274 …) tvar neměly a v appce byly přímou čarou mezi stanicemi.
 
 Použití:
-  python build_train_shapes.py czptt.tar|gtfs.zip  [-o out_dir]
+  python build_train_shapes.py czptt.tar|gtfs.zip  [-o out_dir] [--lat 48.0 51.5] [--lon 11.5 19.5]
+                               [--trips czptt-region.zip]
+
+--trips: jen spoje z tohoto GTFS (czptt-region.zip = přesně vlaky, které má appka v jízdním řádu). Bez něj
+všechny spoje v oblasti (~4× větší soubor, appka by stahovala tvary vlaků, které nikdy nezobrazí).
 Výstup: train_shapes.sqlite + train_shapes.json (built, trips, sha256)
 """
 import argparse, csv, hashlib, io, json, os, sqlite3, sys, tarfile, tempfile, zipfile, zlib
 from datetime import datetime, timezone
 
-RAIL_LAT = (50.10, 51.10)   # drž v souladu s RAIL_BBOX_LAT / RAIL_BBOX_LON v Config.kt
-RAIL_LON = (12.90, 14.60)
+# výchozí oblast = celé Česko (jako LAT / LON v .github/workflows/region-gtfs.yml)
+DEFAULT_LAT = (48.0, 51.5)
+DEFAULT_LON = (11.5, 19.5)
 
 
 def varint(n: int) -> bytes:
@@ -63,7 +70,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("-o", "--out", default=".")
+    ap.add_argument("--lat", nargs=2, type=float, default=DEFAULT_LAT)
+    ap.add_argument("--lon", nargs=2, type=float, default=DEFAULT_LON)
+    ap.add_argument("--trips", help="GTFS zip, jehož trip_id se mají vzít (czptt-region.zip)")
     a = ap.parse_args()
+    only = None
+    if a.trips:
+        with zipfile.ZipFile(a.trips) as tz:
+            only = {r["trip_id"] for r in rows(tz, "trips.txt")}
+        print(f"omezeno na spoje z {os.path.basename(a.trips)}: {len(only)}", file=sys.stderr)
+    RAIL_LAT, RAIL_LON = tuple(a.lat), tuple(a.lon)
     os.makedirs(a.out, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -89,7 +105,7 @@ def main():
                 touch.add(r["trip_id"])
         trip_shape = {}
         for r in rows(zf, "trips.txt"):
-            if r["trip_id"] in touch and r.get("shape_id"):
+            if r["trip_id"] in touch and r.get("shape_id") and (only is None or r["trip_id"] in only):
                 trip_shape[r["trip_id"]] = r["shape_id"]
         need = set(trip_shape.values())
         print(f"spojů v oblasti: {len(trip_shape)}, tvarů: {len(need)}", file=sys.stderr)

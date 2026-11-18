@@ -34,6 +34,12 @@ jobs:
           mkdir -p out
           python3 tools/build_region_gtfs.py jdf-with-pid.zip out/jdf-region.zip --lat $LAT --lon $LON
           python3 tools/build_region_gtfs.py czptt.tar out/czptt-region.zip --lat $LAT --lon $LON
+      # Linky PID, které v CIS nejsou (AE, výlukové X…, MHD 1–9 …), z oficiálního PID GTFS + jejich tvary tras.
+      - name: Doplnit chybějící linky PID
+        run: |
+          curl -fsSL -o PID_GTFS.zip https://data.pid.cz/PID_GTFS.zip
+          python3 tools/add_pid_gtfs.py out/jdf-region.zip jdf.tar PID_GTFS.zip jdf-region-pid.zip --shapes-out shapes-out
+          mv jdf-region-pid.zip out/jdf-region.zip
       # Hotová databáze pro appku: telefon ji jen stáhne a rozbalí (~18 MB) místo importu 540 MB stop_times.
       # Zipy zůstávají jako záloha (starší verze appky a případ, kdy stažení DB selže).
       - name: Postavit databázi jízdních řádů
@@ -48,6 +54,15 @@ jobs:
           printf '{"tag":"%s","built":"%s","db":{"name":"timetable.sqlite.gz","schema":%s,"sha256":"%s","size":%s,"trips":%s}}' \
             "$TAG" "$(date -u +%FT%TZ)" "$SCHEMA" "$SHA" "$SIZE" "$TRIPS" > out/gtfs.json
           cat out/gtfs.json
+      # Tvary vlaků přesně pro vlaky z jízdního řádu appky, ze stejného czptt.tar (nikdy se nerozejdou).
+      - name: Postavit tvary vlaků
+        run: python3 tools/build_train_shapes.py czptt.tar -o shapes-out --trips out/czptt-region.zip
+      - name: Nahrát tvary vlaků do releasu "shapes"
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release upload shapes shapes-out/train_shapes.sqlite shapes-out/pid_shapes.sqlite --clobber
+          gh release upload shapes shapes-out/pid_shapes.json --clobber
+          gh release upload shapes shapes-out/train_shapes.json --clobber
       - name: Nahrát do releasu "gtfs"
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
