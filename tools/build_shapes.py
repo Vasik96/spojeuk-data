@@ -178,8 +178,15 @@ def load_overrides(path):
                 raise ValueError(f"override bez 'match': {o.get('comment', o)}")
             if ("splice" in o) == ("replace" in o):
                 raise ValueError(f"override musí mít právě jedno z 'splice'/'replace': {o.get('comment', o)}")
+            # neznámý klíč (třeba "via" omylem vedle "splice" místo uvnitř) by se tiše ignoroval => rovná čára
+            extra = set(o) - {"comment", "enabled", "match", "splice", "replace"}
+            if extra:
+                raise ValueError(f"neznámé klíče {sorted(extra)} (via patří dovnitř splice): {o.get('comment', o)}")
             if "splice" in o:
                 s = o["splice"]
+                extra = set(s) - {"from", "to", "via"}
+                if extra:
+                    raise ValueError(f"neznámé klíče ve splice {sorted(extra)}: {o.get('comment', o)}")
                 parse_pt(s["from"]); parse_pt(s["to"])
                 [parse_pt(p) for p in s.get("via", [])]
             else:
