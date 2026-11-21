@@ -65,6 +65,22 @@ def used_this_week(node, post, start):
     return False
 
 
+RETRY_WAIT_S = 30       # stanoviště, které selhalo i po opakováních v get(): počkat a zkusit znovu
+RETRY_ROUNDS = 10       # nejvýš tolik kol (portabo bývá přetížené jen chvíli)
+
+
+def used_with_retry(node, post, start):
+    """used_this_week, a když portabo nedá odpověď ani po opakováních, po RETRY_WAIT_S znovu (workflow pokračuje)."""
+    for rnd in range(RETRY_ROUNDS):
+        try:
+            return used_this_week(node, post, start)
+        except Exception as e:  # noqa: BLE001
+            if rnd == RETRY_ROUNDS - 1:
+                raise
+            print(f"  ({node}, {post}): {e}; za {RETRY_WAIT_S} s znovu ({rnd + 2}/{RETRY_ROUNDS})", file=sys.stderr, flush=True)
+            time.sleep(RETRY_WAIT_S)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -93,7 +109,7 @@ def main():
     used, failed = {}, 0
     t0 = time.time()
     with cf.ThreadPoolExecutor(a.workers) as ex:
-        futs = {ex.submit(used_this_week, n, p, start): (n, p) for n, p in keys}
+        futs = {ex.submit(used_with_retry, n, p, start): (n, p) for n, p in keys}
         for i, f in enumerate(cf.as_completed(futs), 1):
             k = futs[f]
             try:
@@ -101,9 +117,9 @@ def main():
             except Exception as e:  # noqa: BLE001
                 failed += 1
                 used[k] = True   # nevíme: radši ukázat (chybějící stanoviště je horší než prázdné)
-                print(f"  {k}: {e}", file=sys.stderr)
+                print(f"  {k}: {e} (vzdáno, bere se jako používané)", file=sys.stderr, flush=True)
             if i % 500 == 0:
-                print(f"  {i}/{len(keys)} stanovišť ({time.time() - t0:.0f} s)", file=sys.stderr)
+                print(f"  {i}/{len(keys)} stanovišť ({time.time() - t0:.0f} s)", file=sys.stderr, flush=True)
     if failed > len(keys) * 0.2:
         raise SystemExit(f"příliš mnoho chyb ({failed}/{len(keys)}), nepublikuje se")
 
